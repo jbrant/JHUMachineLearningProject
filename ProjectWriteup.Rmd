@@ -1,0 +1,147 @@
+---
+title: "Practical Machine Learning Project"
+output: html_document
+---
+
+## Executive Summary
+With the advent of wearable devices, a sort of fitness sub-culture is emerging, including enthusiasts who regularly track their activities in order to gauge the amount of a given activity (often for the purpose of tracking calorie expenditure).  One pertinent metric that is not often quantified, however, is the accuracy with which the wearer performs a given exercise.  Researchers at the Pontifical Catholic University of Rio de Janeiro collected a Human Activity recognition dataset on which such analyses can be performed.  The weight lifting exercises dataset captured input from accelerometers on the belt, forearm, arm, and dumbell off 6 participants.  These participants were requested to perform barbell lifts correctly as well as incorrectly in five different ways.  We claned up the dataset and trained a model (using random forests) that accurately classified the class of exercise, using primarily the accelerator input as predictors.  Classification accuracy was quite high (greater than 99% at p < 0.001) on both the training dataset and the cross-validation dataset.
+
+## Data Fetching and Exploratory Analysis
+The dataset was downloaded directly from a mirror and read into R, denoting both the empty string and the string literal "NA" as NA values.  This makes it easier to handle NA values in the pre-processing section.
+
+```{r dataLoad}
+
+#training.url <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+#testing.url <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+#download.file(training.url, "har-training.csv", mode = "wb")
+#download.file(testing.url, "har-testing.csv", mode = "wb")
+
+## Read in training data
+training.data <- read.csv("har-training.csv", na.strings = c("", "NA"))
+
+## Read in testing data
+testing.data <- read.csv("har-testing.csv", na.strings = c("", "NA"))
+```
+
+In order to get a quick overview of the data under consideration, we looked at the number of observations and number of variables in the data set (some of which will necessarily be removed during pre-processing).
+
+```{r observationsVariablesTable}
+library(pander)
+
+## Observe the dimensionality of the training and test sets
+dim.data.frame <- rbind.data.frame(dim(training.data), dim(testing.data))
+rownames(dim.data.frame) <- c("Training Data", "Testing  Data")
+colnames(dim.data.frame) <- c("# of Observations", "# of Variables")
+
+#3 Generate table
+pander(dim.data.frame, caption = "Table 1: Number of Observations and Variables for Training and Testing data")
+```
+
+Furthermore, to get an idea of the distribution of data between exercise classes, we graphed the distribution of such below.
+
+```{r classDistribution}
+suppressMessages(library(ggplot2))
+
+## Note the number of observations for the 5 different ways
+## in which the exercise could be performed
+ggplot(training.data, aes(classe)) + 
+  geom_bar(fill = "steelblue") +
+  labs(title = "Figure 1: Number of Observations per Class", x = "Classe", y = "Observations") +
+  theme(plot.title = element_text(face = "bold", size = 16, vjust = 1),
+        axis.title.x = element_text(face = "bold"),
+        axis.title.y = element_text(face = "bold"))
+```
+
+## Dataset Partitioning
+Though rather straight-forward in practice, a critical first step was in how the dataset was partitioned.  So as to not touch the test set until time for final validation, the full training set was partitioned into two sets: a smaller training set and a cross-validation set.  We found that committing 85% of the original training set to training and the remaining 15% to cross-validation yielded the most desirable results in terms of classification accuracy.
+
+```{r dataPartitioning}
+suppressMessages(library(caret))
+
+## Set seed for reproducibility
+set.seed(54321)
+
+## Partition the training set into a training and cross-validation set (85%/15%)
+training.indexes <- createDataPartition(training.data$classe, p = 0.85, list = FALSE)
+training.set <- training.data[training.indexes,]
+cross.validation.set <- training.data[-training.indexes,]
+```
+
+## Cleaning and Pre-Processing
+Cleaning and processing the data for training was perhaps the single most pertinent step.  The accuracy of classification is directly dependent on the usefulness of the information inherent in the predictors.  Therefore, predictors with almost no variability contain little information and could reduce the accuracy of our model.  As such, the first pre-processing step was to remove variables that have "near zero" variability.
+
+```{r nearZeroRemoval}
+## Remove predictors that have near zero variance
+near.zero.var <- nearZeroVar(training.set)
+training.set <- training.set[, -near.zero.var]
+```
+
+Similar in spirt to the above removal of predictors with near zero variability, there also exists predictors that do not contribute meaningful information to the training algorithm.  These are variables such as the username, the time at which the exercise was performed, the unique identifier of the event, and a few others.  It was not possible to mark these for removal based on characteristics of their data, so they were manually specified for exclusion.
+
+```{r irrelevantColRemoval}
+## The following columns have no predictive relevance, so remove them
+irrelevant.cols <- c("X", "user_name", "raw_timestamp_part_1", "raw_timestamp_part_2", 
+                     "cvtd_timestamp", "new_window", "num_window")
+training.set <- training.set[, !names(training.set) %in% irrelevant.cols]
+```
+
+A side-effect of using random forests as the learning method is that it does not handle missing values (i.e. "NA's").  There were two ways in which we could have gone about handling this: imputing the missing values or removing the predictors containing missing values entirely.  It turned out that predictors with any missing value had *A LOT* of missing values (greater than 50%), so they didn't add much with regard to prediction accuracy to begin with.  Therefore, the best approach was simply to remove those predictors from the training dataset.
+
+```{r removeIrrelevantPreds}
+## Subset the training set to columns that have no NAs 
+## (this actually yielded better results than imputation)
+training.set <- training.set[,colSums(is.na(training.set)) == 0]
+```
+
+## Model Training and Prediction
+After the cleaning and pre-processing steps were complete, we trained the model using the random forests algorithm.  All of the remaining variables were used as predictors for the class of exercise (i.e. the way in which the exercise was being performed).  An extra step that was taken with the hope of increasing model accuracy was setting the "importance" parameter to true, causing the model to extract the features that it determines to be the most important and given those features much greater weight during prediction.  This is an automatic process that is based on the out-of-bag (OOB) error rate and node impurity (caused by splitting the variable when generating descendants).  The recursive flag was set to force re-evaluation of feature importance at every level of the forest.
+
+One parameter that needed to be explicitly tuned was the total number of trees.  We wanted to provide the best possible model accuracy while avoiding over-fitting.  The cross-validation dataset served as a good sanity check for this.  It turned out that while there was little additional return above 40 - 50 trees, 100 trees gave us the best possible accuracy without sacrificing accuracy on the cross-validation dataset due to overfitting.
+
+```{r modelDefinition}
+suppressMessages(library(randomForest))
+
+## Train the model using random forests using 100 trees
+model <- randomForest(classe ~ ., 
+                      data = training.set, 
+                      importance = TRUE, 
+                      recursive = TRUE,                      
+                      ntree = 100)
+```
+
+The model was trained on the training dataset and the resulting confusion matrix derived.  The classification accuracy obtained was very high (at effectively $100\%$) with a very high level of confidence ($p < 0.001$).
+
+```{r modelTraining}
+## Run training
+training.results <- predict(model, training.set)
+print(confusionMatrix(training.results, training.set$classe))
+```
+
+After achieving satisfactory results on the training, the cross-validation dataset was run through the model, also achieving very high accuracy (greater than $99.9\%$) with a very high level of confidence ($p < 0.001$).
+
+```{r modelCrossValidation}
+## Run cross-validation
+cross.validation.results <- predict(model, cross.validation.set)
+print(confusionMatrix(cross.validation.results, cross.validation.set$classe))
+```
+
+## Submission
+The submission portion of the assignment merely involves running the test data set through the model and generating files for each of the 20 problems.  The code for doing such is given below.
+
+```{r submission}
+## Run the model on the testing dataset
+testing.results <- as.character(predict(model, testing.data))
+
+## Define the function supplied in the assignment instructions
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+## Invoke the above function to generate the answer file
+pml_write_files(testing.results)
+```
