@@ -11,17 +11,14 @@ The dataset was downloaded directly from a mirror and read into R, denoting both
 
 ```{r dataLoad}
 
-#training.url <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
-#testing.url <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
-
-#download.file(training.url, "har-training.csv", mode = "wb")
-#download.file(testing.url, "har-testing.csv", mode = "wb")
+training.url <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testing.url <- "http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
 
 ## Read in training data
-training.data <- read.csv("har-training.csv", na.strings = c("", "NA"))
+training.data <- read.csv(training.url, na.strings = c("", "NA"))
 
 ## Read in testing data
-testing.data <- read.csv("har-testing.csv", na.strings = c("", "NA"))
+testing.data <- read.csv(testing.url, na.strings = c("", "NA"))
 ```
 
 In order to get a quick overview of the data under consideration, we looked at the number of observations and number of variables in the data set (some of which will necessarily be removed during pre-processing).
